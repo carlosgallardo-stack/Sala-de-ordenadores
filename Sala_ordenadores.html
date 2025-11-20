@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Reserva de Sala por Semanas</title>
+<style>
+  body { font-family: Arial, sans-serif; background:#f0f2f5; margin:0; padding:0; }
+  h2,h3 { margin:0; padding:0; }
+  #loginBox { width: 360px; margin: 100px auto; padding: 30px; background:#fff; border-radius:12px; box-shadow:0 8px 16px rgba(0,0,0,0.15); }
+  input { width: 100%; padding:10px; margin:10px 0; border-radius:6px; border:1px solid #ccc; font-size:14px; }
+  button { padding:10px 16px; border:none; border-radius:6px; background:#007bff; color:white; cursor:pointer; font-size:15px; }
+  button:hover { background:#0056b3; }
+  #app { display:none; padding:20px; }
+  table { border-collapse: collapse; width: 100%; max-width: 1000px; margin: 20px auto; background:#fff; border-radius:12px; overflow:hidden; box-shadow:0 8px 16px rgba(0,0,0,0.08); }
+  th, td { border:1px solid #dee2e6; padding:14px; text-align:center; font-size:14px; }
+  th { background:#f8f9fa; color:#495057; font-weight:600; }
+  .libre { background:#d4edda; cursor:pointer; transition:0.2s; }
+  .libre:hover { background:#c3e6cb; }
+  .reservado { background:#cce5ff; cursor:pointer; transition:0.2s; }
+  .reservado:hover { background:#99ccff; }
+  .bloqueado { background:#f8d7da; cursor:pointer; color:#721c24; font-weight:bold; }
+  #info { text-align:center; margin-bottom:12px; font-size:16px; }
+  #weekSelect { text-align:center; margin-bottom:15px; }
+</style>
+</head>
+<body>
+
+<div id="loginBox">
+<h3>Login</h3>
+<input type="text" id="user" placeholder="Usuario (Admin o profesor)"><br>
+<input type="password" id="pass" placeholder="Contraseña (solo Admin)"><br>
+<button onclick="login()">Entrar</button>
+</div>
+
+<div id="app">
+<h2 style="text-align:center;">Reserva de Sala - Horario Semanal</h2>
+<div id="info">Usuario: <span id="currentUser"></span> <span id="adminLabel"></span></div>
+<div id="weekSelect">
+<label for="week">Semana: </label>
+<input type="week" id="week" onchange="changeWeek()">
+</div>
+<table id="schedule"></table>
+</div>
+
+<script>
+const DAYS = ['Lunes','Martes','Miércoles','Jueves','Viernes'];
+const SLOTS = ['1ª','2ª','3ª','4ª','5ª','6ª'];
+const PROFESSORS = ['PMR','LLOP','IPC','CHZ','JMS','JFZ','PEPI','CGV','CBN','JCJ','IMR','CMC','JPM','JCO','RPO','JFA'];
+const STORAGE_KEY = 'reserva_sala_semana_html';
+
+let currentUser = '';
+let isAdmin = false;
+let currentWeek = getCurrentWeek();
+
+const initialBlocks = {
+  'Miércoles':{'4ª':'1º CFGB-AF PROYECTO','3ª':'1º CFGM-B PROYECTO'},
+  'Lunes':{'6ª':'1º CFGM-A PROYECTO','3ª':'2º CFGM-A PROYECTO','4ª':'2º CFGS PROYECTO'},
+  'Martes':{'2ª':'2º CFGM-B PROYECTO'},
+  'Jueves':{'6ª':'1º CFGS PROYECTO'}
+};
+
+const specialWeeks = ['48'];
+
+let schedule = JSON.parse(localStorage.getItem(STORAGE_KEY)) || {};
+
+function getWeekDates(week){
+  const [year, w] = week.split('-W');
+  const firstDay = new Date(year,0,1);
+  const daysOffset = (w-1)*7 - firstDay.getDay() + 1;
+  const monday = new Date(firstDay.setDate(firstDay.getDate()+daysOffset));
+  let dates = [];
+  for(let i=0;i<5;i++){
+    const d = new Date(monday); d.setDate(monday.getDate()+i);
+    dates.push(d.toLocaleDateString('es-ES'));
+  }
+  return dates;
+}
+
+function initWeek(week){
+  if(!schedule[week]){
+    schedule[week]={};
+    for(let d of DAYS){
+      schedule[week][d]={};
+      for(let s of SLOTS){
+        // Para semana 48 quitar todas las reservas pero permitir al admin quitar PROYECTO
+        if(specialWeeks.includes(week.split('-W')[1]) && initialBlocks[d] && initialBlocks[d][s]){
+          schedule[week][d][s]={user:'Admin', label:initialBlocks[d][s], fixed:true};
+        } else {
+          schedule[week][d][s]={user:'', label:'Libre', fixed:false};
+          if(initialBlocks[d] && initialBlocks[d][s] && !specialWeeks.includes(week.split('-W')[1])){
+            schedule[week][d][s]={user:'Admin', label:initialBlocks[d][s], fixed:true};
+          }
+        }
+      }
+    }
+    localStorage.setItem(STORAGE_KEY,JSON.stringify(schedule));
+  }
+}
+
+initWeek(currentWeek);
+
+function getCurrentWeek(){
+  const d=new Date();
+  const onejan=new Date(d.getFullYear(),0,1);
+  const week=Math.ceil((((d-onejan)/86400000)+onejan.getDay()+1)/7);
+  return d.getFullYear()+'-W'+week;
+}
+
+function login(){
+  const userInput=document.getElementById('user').value.trim();
+  const passInput=document.getElementById('pass').value;
+  if(userInput==='Admin' && passInput==='Sala.2025'){
+    currentUser='Admin'; isAdmin=true;
+  } else if(PROFESSORS.includes(userInput)){
+    currentUser=userInput; isAdmin=false;
+  } else { alert('Usuario o contraseña incorrecta'); return; }
+
+  document.getElementById('loginBox').style.display='none';
+  document.getElementById('app').style.display='block';
+  document.getElementById('currentUser').innerText=currentUser;
+  document.getElementById('adminLabel').innerText=isAdmin?'(Admin)':'';
+  document.getElementById('week').value=currentWeek;
+  renderSchedule();
+}
+
+function countUserReservations(user){
+  let count=0;
+  for(let s of SLOTS){
+    for(let d of DAYS){
+      if(schedule[currentWeek][d][s].user===user) count++;
+    }
+  }
+  return count;
+}
+
+function canReserve(){
+  if(isAdmin) return true;
+  const today=new Date();
+  const weekInput=new Date(document.getElementById('week').value+'-1');
+  return weekInput>=today && today.getDay()>=5;
+}
+
+function toggleSlot(day,slot){
+  let cell=schedule[currentWeek][day][slot];
+  if(!cell) return;
+  if(!canReserve()){ alert('Solo se puede reservar para semanas futuras a partir del viernes anterior'); return; }
+
+  if(!cell.fixed){
+    if(!isAdmin && countUserReservations(currentUser)>=2){ alert('Solo 2 horas por semana'); return; }
+    cell.user=currentUser; cell.fixed=true; cell.label='Reservado';
+  } else if(cell.user===currentUser || isAdmin){
+    cell.user='';
+    // Admin puede quitar PROYECTO en cualquier semana
+    if(initialBlocks[day] && initialBlocks[day][slot] && !isAdmin){
+      cell.fixed=true;
+      cell.label=initialBlocks[day][slot];
+    } else {
+      cell.fixed=false;
+      cell.label='Libre';
+    }
+  }
+
+  localStorage.setItem(STORAGE_KEY,JSON.stringify(schedule));
+  renderSchedule();
+}
+
+function changeWeek(){
+  currentWeek=document.getElementById('week').value;
+  initWeek(currentWeek);
+  renderSchedule();
+}
+
+function renderSchedule(){
+  const weekDates = getWeekDates(currentWeek);
+  let table='<tr><th>Hora/Día</th>' + DAYS.map((d,i)=>`<th>${d}<br>${weekDates[i]}</th>`).join('')+'</tr>';
+  for(let s of SLOTS){
+    table+='<tr><td>'+s+'</td>';
+    for(let d of DAYS){
+      let cell=schedule[currentWeek][d][s];
+      let cls='libre';
+      if(cell.fixed && cell.user==='Admin') cls='bloqueado';
+      else if(cell.fixed) cls='reservado';
+      table+=`<td class='${cls}' onclick="toggleSlot('${d}','${s}')">${cell.label}</td>`;
+    }
+    table+='</tr>';
+  }
+  document.getElementById('schedule').innerHTML=table;
+}
+</script>
+
+</body>
+</html>
